@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,94 +10,90 @@ import (
 	"time"
 )
 
-// # get: merge-commit | merge-base | last commit | merge-commit-timestamp
-// git log --merges --pretty='%H %P %at' -n 10
-
-// # with: merge-commit...merge-base
-// # get oldest commit unix timestamp
-// git rev-list --pretty='%at' 5d8f7fca0...b439a2264 | tail -1
-// 1539885622
-
 func main() {
-	commits := getMergeCommits()
+	var countPtr = flag.String("count", "10", "number of commits to walk back on")
+	flag.Parse()
 
-	// fmt.Println(commits)
+	lastMergeDurations(*countPtr)
+}
 
-	for _, mcSring := range commits {
-		body := strings.Split(mcSring, " ")
-		mergeCommit := string(body[0])
-		mergeBase := string(body[1])
-		mergeTime := string(body[3])
+func lastMergeDurations(count string) {
+	mergesLines := getMergeCommits(count)
 
-		// fmt.Println(mergeCommit)
-		// fmt.Println(mergeBase)
-		branchTime := getBranchTime(mergeCommit, mergeBase)
-		// fmt.Println(branchTime)
-
-		// a, err := time.Parse(mergeTime, branchTime)
-		// if err != nil {
-		// 	return
-		// }
-
-		mergeTimeInt, _ := strconv.ParseInt(mergeTime, 10, 64)
-		branchTimeInt, _ := strconv.ParseInt(branchTime, 10, 64)
-
-		t1 := time.Unix(mergeTimeInt, 0)
-		t2 := time.Unix(branchTimeInt, 0)
-		delta := t1.Sub(t2)
-		fmt.Println(delta)
+	for _, line := range mergesLines {
+		mergeDuration(line)
 	}
 }
 
-func getBranchTime(mergeCommit, mergeBase string) string {
-	// 	with: merge-commit...merge-base
-	// get oldest commit unix timestamp
-	// git rev-list --pretty='%at' 5d8f7fca0...b439a2264 | tail -1
-	// commit dc17abef73365b9f659c5cb2655fc59404720340
-	// 1539970561
-	// commit 2a0b532200f2751daceb1af6b1e55285cbb836af
-	// 1539885622
-	var (
-		cmdOut []byte
-		err    error
-	)
+func mergeDuration(line mergesLine) {
+	branchTime := getBranchTime(line.mergeSha, line.mergeBaseSha)
 
-	cmdName := "git"
+	mergeTimeInt, _ := strconv.ParseInt(line.mergeTime, 10, 64)
+	branchTimeInt, _ := strconv.ParseInt(branchTime, 10, 64)
+
+	t1 := time.Unix(mergeTimeInt, 0)
+	t2 := time.Unix(branchTimeInt, 0)
+	delta := t1.Sub(t2)
+	fmt.Println(delta, line.mergeSha, line.subject)
+}
+
+// get oldest commit unix timestamp
+// git rev-list --pretty='%at' 5d8f7fca0...b439a2264 | tail -1
+// commit dc17abef73365b9f659c5cb2655fc59404720340
+// 1539970561
+// commit 2a0b532200f2751daceb1af6b1e55285cbb836af
+// 1539885622
+func getBranchTime(mergeCommit, mergeBase string) string {
 	commitRange := mergeCommit + "..." + mergeBase
 	cmdArgs := []string{"rev-list", "--pretty=%at", commitRange}
-	if cmdOut, err = exec.Command(cmdName, cmdArgs...).Output(); err != nil {
-		fmt.Fprintln(os.Stderr, "There was an error running git rev-parse command: ", err)
-		os.Exit(1)
-	}
 
-	stringResult := string(cmdOut[:])
-
-	lines := strings.Split(stringResult, "\n")
-	if len(lines) > 0 {
-		lines = lines[:len(lines)-1]
-	}
-
+	lines := runGitCmd(cmdArgs)
 	lastDate := lines[len(lines)-1]
 
 	return lastDate
 }
 
-func getMergeCommits() []string {
-	var (
-		cmdOut []byte
-		err    error
-	)
-	cmdName := "git"
-	cmdArgs := []string{"log", "--merges", "--pretty=%H %P %at", "-n 5"}
-	if cmdOut, err = exec.Command(cmdName, cmdArgs...).Output(); err != nil {
-		fmt.Fprintln(os.Stderr, "There was an error running git rev-parse command: ", err)
-		os.Exit(1)
-	}
-	stringResult := string(cmdOut[:])
-	resultArgs := strings.Split(stringResult, "\n")
-	if len(resultArgs) > 0 {
-		resultArgs = resultArgs[:len(resultArgs)-1]
+type mergesLine struct {
+	subject         string
+	mergeSha        string
+	mergeBaseSha    string
+	latestCommitSha string
+	mergeTime       string
+}
+
+// [subject, merge-sha, merge-base-sha, latest-commit-sha, merge-time]
+func getMergeCommits(count string) []mergesLine {
+	numberCommits := "-n " + count
+	cmdArgs := []string{"log", "--merges", "--pretty=%f %H %P %at", numberCommits}
+	lines := runGitCmd(cmdArgs)
+
+	mergesLines := []mergesLine{}
+	for _, line := range lines {
+		values := strings.Split(line, " ")
+		mergesLines = append(mergesLines, mergesLine{
+			subject:         string(values[0]),
+			mergeSha:        string(values[1]),
+			mergeBaseSha:    string(values[2]),
+			latestCommitSha: string(values[3]),
+			mergeTime:       string(values[4]),
+		})
 	}
 
-	return resultArgs
+	return mergesLines
+}
+
+func runGitCmd(cmdArgs []string) []string {
+	cmdOut, err := exec.Command("git", cmdArgs...).Output()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error running cmd: ", cmdArgs, err)
+		os.Exit(1)
+	}
+
+	resultString := string(cmdOut[:])
+	resultLines := strings.Split(resultString, "\n")
+	if len(resultLines) > 0 {
+		resultLines = resultLines[:len(resultLines)-1]
+	}
+
+	return resultLines
 }
