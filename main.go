@@ -18,31 +18,32 @@ func main() {
 }
 
 func lastMergeDurations(count string) {
-	mergesLines := getMergeCommits(count)
+	mergeCommits := getMergeCommits(count)
+	avg := avgDuration(mergeCommits)
 
-	for _, line := range mergesLines {
-		mergeDuration(line)
+	for _, commit := range mergeCommits {
+		fmt.Println(commit.duration, commit.mergeSha, commit.subject)
+	}
+
+	days := (avg * time.Second).Hours() / 24
+	if days < float64(1) {
+		fmt.Println("avg: ", time.Duration(avg*time.Second))
+	} else {
+		fmt.Println("avg: ", strconv.FormatFloat(days, 'f', 1, 64)+" days")
 	}
 }
 
-func mergeDuration(line mergesLine) {
-	branchTime := getBranchTime(line.mergeSha, line.mergeBaseSha)
+func avgDuration(commits []mergeCommit) time.Duration {
+	total := 0 * time.Second
+	var count float64
+	for _, commit := range commits {
+		count++
+		total += commit.duration
+	}
 
-	mergeTimeInt, _ := strconv.ParseInt(line.mergeTime, 10, 64)
-	branchTimeInt, _ := strconv.ParseInt(branchTime, 10, 64)
-
-	t1 := time.Unix(mergeTimeInt, 0)
-	t2 := time.Unix(branchTimeInt, 0)
-	delta := t1.Sub(t2)
-	fmt.Println(delta, line.mergeSha, line.subject)
+	return time.Duration(total.Seconds() / count)
 }
 
-// get oldest commit unix timestamp
-// git rev-list --pretty='%at' 5d8f7fca0...b439a2264 | tail -1
-// commit dc17abef73365b9f659c5cb2655fc59404720340
-// 1539970561
-// commit 2a0b532200f2751daceb1af6b1e55285cbb836af
-// 1539885622
 func getBranchTime(mergeCommit, mergeBase string) string {
 	commitRange := mergeCommit + "..." + mergeBase
 	cmdArgs := []string{"rev-list", "--pretty=%at", commitRange}
@@ -53,33 +54,51 @@ func getBranchTime(mergeCommit, mergeBase string) string {
 	return lastDate
 }
 
-type mergesLine struct {
+type mergeCommit struct {
 	subject         string
 	mergeSha        string
 	mergeBaseSha    string
 	latestCommitSha string
 	mergeTime       string
+	duration        time.Duration
+}
+
+func (c *mergeCommit) calcMergeDuration() {
+	branchTime := getBranchTime(c.mergeSha, c.mergeBaseSha)
+
+	mergeTimeInt, _ := strconv.ParseInt(c.mergeTime, 10, 64)
+	branchTimeInt, _ := strconv.ParseInt(branchTime, 10, 64)
+
+	t1 := time.Unix(mergeTimeInt, 0)
+	t2 := time.Unix(branchTimeInt, 0)
+	c.duration = t1.Sub(t2)
 }
 
 // [subject, merge-sha, merge-base-sha, latest-commit-sha, merge-time]
-func getMergeCommits(count string) []mergesLine {
+func getMergeCommits(count string) []mergeCommit {
 	numberCommits := "-n " + count
 	cmdArgs := []string{"log", "--merges", "--pretty=%f %H %P %at", numberCommits}
 	lines := runGitCmd(cmdArgs)
 
-	mergesLines := []mergesLine{}
+	mergeCommits := []mergeCommit{}
 	for _, line := range lines {
-		values := strings.Split(line, " ")
-		mergesLines = append(mergesLines, mergesLine{
-			subject:         string(values[0]),
-			mergeSha:        string(values[1]),
-			mergeBaseSha:    string(values[2]),
-			latestCommitSha: string(values[3]),
-			mergeTime:       string(values[4]),
-		})
+		commit := commitFromLine(line)
+		commit.calcMergeDuration()
+		mergeCommits = append(mergeCommits, commit)
 	}
 
-	return mergesLines
+	return mergeCommits
+}
+
+func commitFromLine(line string) mergeCommit {
+	values := strings.Split(line, " ")
+	return mergeCommit{
+		subject:         string(values[0]),
+		mergeSha:        string(values[1]),
+		mergeBaseSha:    string(values[2]),
+		latestCommitSha: string(values[3]),
+		mergeTime:       string(values[4]),
+	}
 }
 
 func runGitCmd(cmdArgs []string) []string {
